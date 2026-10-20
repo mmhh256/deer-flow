@@ -107,12 +107,16 @@ class SubagentExecutionCapacity:
 
     async def _release_cancellation_safe(self) -> None:
         """Release an acquired slot before propagating repeated cancellation."""
+        # Releasing can wait for _lock. Give cleanup its own task so cancelling
+        # the slot owner cannot cancel the pending slot handoff/decrement.
         release_task = asyncio.create_task(self._release())
         cancellation: asyncio.CancelledError | None = None
         while not release_task.done():
             try:
                 await asyncio.shield(release_task)
             except asyncio.CancelledError as exc:
+                # shield protects the release task, not this awaiter. Keep joining
+                # that same task after every cancellation; never release twice.
                 if cancellation is None:
                     cancellation = exc
 
@@ -120,6 +124,8 @@ class SubagentExecutionCapacity:
             try:
                 release_task.result()
             except Exception as exc:
+                # Caller cancellation stays primary; retain cleanup failure as its
+                # cause instead of replacing the cancellation with that failure.
                 raise cancellation from exc
             raise cancellation
         release_task.result()
