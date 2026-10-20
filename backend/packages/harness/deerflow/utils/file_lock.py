@@ -27,6 +27,8 @@ def retry_until_locked(
     tests local rather than replacing functions on the shared time module.
     """
     while True:
+        # Keep caller policy outside the acquisition handler: even an EACCES
+        # raised by check() must propagate, rather than look like lock contention.
         if check is not None:
             check()
         try:
@@ -40,5 +42,7 @@ def retry_until_locked(
                 remaining = deadline - monotonic()
                 if remaining <= 0:
                     raise TimeoutError(timeout_message) from None
+                # Bound the requested sleep by the remaining monotonic budget;
+                # an unconditional interval could overshoot the caller's deadline.
                 delay = min(delay, remaining)
             sleep(delay)

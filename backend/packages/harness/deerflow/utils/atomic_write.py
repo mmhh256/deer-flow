@@ -48,6 +48,8 @@ def publish_bytes_atomically(path: Path, content: bytes) -> None:
     except FileNotFoundError:
         mode = None
 
+    # Stage beside the destination so replacement stays on one filesystem;
+    # moving a temporary from another filesystem cannot use atomic rename.
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
     # Let the kernel apply umask; reading it via os.umask would mutate
@@ -67,5 +69,7 @@ def publish_bytes_atomically(path: Path, content: bytes) -> None:
             os.fsync(handle.fileno())
         os.replace(temporary, path)
     except BaseException:
+        # Interruptions also need to discard the owned sibling. Re-raise after
+        # cleanup so KeyboardInterrupt/SystemExit retain their original outcome.
         cleanup_failed_atomic_write(temporary, fd)
         raise
