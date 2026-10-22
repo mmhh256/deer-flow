@@ -176,3 +176,79 @@ def test_bump_version_refuses_to_run_without_uv(tmp_path: Path) -> None:
     assert "uv" in (result.stderr + result.stdout)
     assert (root / "backend" / "pyproject.toml").read_text(encoding="utf-8") == PYPROJECT, "the script edited files before checking for uv"
     assert _lock_version(root) == "2.1.0rc0"
+
+
+@pytest.mark.parametrize("version", ["2.2.0", "2.1.0-rc1"])
+def test_bump_version_can_be_repeated(tmp_path: Path, version: str) -> None:
+    """An already aligned tree still refreshes and checks the lock."""
+    root = _write_sandbox(tmp_path / "repo")
+    bin_dir = _install_fake_uv(root)
+    first = _run_bump(root, version, path_prefix=bin_dir)
+    assert first.returncode == 0, first.stderr
+    paths = [root / path for path in ("backend/pyproject.toml", "backend/uv.lock", "frontend/package.json", "deploy/helm/deer-flow/Chart.yaml")]
+    before = [path.read_bytes() for path in paths]
+    (bin_dir / "uv-calls.log").write_text("", encoding="utf-8")
+
+    repeated = _run_bump(root, version, path_prefix=bin_dir)
+
+    assert repeated.returncode == 0, repeated.stderr
+    assert [path.read_bytes() for path in paths] == before
+    assert (bin_dir / "uv-calls.log").read_text(encoding="utf-8").splitlines() == ["uv lock", "uv lock --check"]
+
+
+def test_bump_version_retries_after_lock_failure(tmp_path: Path) -> None:
+    """Follow the real failure diagnostic's instruction to re-run the bump."""
+    root = _write_sandbox(tmp_path / "repo")
+    bin_dir = _install_fake_uv(root)
+    uv = bin_dir / "uv"
+    uv.write_text("#!/usr/bin/env python3\nimport sys\nsys.exit('temporary lock failure')\n", encoding="utf-8")
+
+    failed = _run_bump(root, "2.2.0", path_prefix=bin_dir)
+    assert failed.returncode != 0
+    assert "uv lock' failed" in failed.stderr
+    assert _lock_version(root) == "2.1.0rc0"
+    assert 'version = "2.2.0"' in (root / "backend/pyproject.toml").read_text(encoding="utf-8")
+    uv.write_text(FAKE_UV, encoding="utf-8")
+
+    retried = _run_bump(root, "2.2.0", path_prefix=bin_dir)
+
+    assert retried.returncode == 0, retried.stderr
+    assert _lock_version(root) == "2.2.0"
+    assert (bin_dir / "uv-calls.log").read_text(encoding="utf-8").splitlines() == ["uv lock", "uv lock --check"]
+
+
+@pytest.mark.parametrize("relative_path", ["backend/pyproject.toml", "frontend/package.json", "deploy/helm/deer-flow/Chart.yaml"])
+def test_bump_version_repairs_partially_aligned_sources(tmp_path: Path, relative_path: str) -> None:
+    root = _write_sandbox(tmp_path / "repo")
+    bin_dir = _install_fake_uv(root)
+    path = root / relative_path
+    path.write_text(path.read_text(encoding="utf-8").replace("2.1.0-rc0", "2.2.0"), encoding="utf-8")
+
+    result = _run_bump(root, "2.2.0", path_prefix=bin_dir)
+
+    assert result.returncode == 0, result.stderr
+    assert _lock_version(root) == "2.2.0"
+    assert "OK — all version sources agree on 2.2.0." in result.stdout
+
+
+@pytest.mark.parametrize(
+    "relative_path, field",
+    [
+        ("backend/pyproject.toml", 'version = "2.1.0-rc0"'),
+        ("frontend/package.json", '"version": "2.1.0-rc0",'),
+        ("deploy/helm/deer-flow/Chart.yaml", "version: 2.1.0-rc0"),
+        ("deploy/helm/deer-flow/Chart.yaml", 'appVersion: "2.1.0-rc0"'),
+    ],
+)
+def test_bump_version_rejects_missing_fields(tmp_path: Path, relative_path: str, field: str) -> None:
+    """Accepting an unchanged value must not accept an absent field."""
+    root = _write_sandbox(tmp_path / "repo")
+    bin_dir = _install_fake_uv(root)
+    path = root / relative_path
+    path.write_text(path.read_text(encoding="utf-8").replace(field, ""), encoding="utf-8")
+
+    result = _run_bump(root, "2.2.0", path_prefix=bin_dir)
+
+    assert result.returncode != 0
+    assert "error:" in result.stderr
+    assert (bin_dir / "uv-calls.log").read_text(encoding="utf-8") == ""

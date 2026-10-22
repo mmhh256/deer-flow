@@ -37,6 +37,9 @@ distinguishes it from a release.
   Needs `uv` on `PATH` (`backend/uv.lock` pins the root package version too, and
   lint CI runs `uv lock --check`); the script fails before editing anything when
   `uv` is missing.
+  Re-running the same version is supported, including after a failed `uv lock`:
+  fix the resolution problem and repeat the command to refresh and verify the
+  lock. Version fields already at the target are accepted; missing fields fail.
   ```bash
   scripts/bump_version.sh 2.1.0
   ```

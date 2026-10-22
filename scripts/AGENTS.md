@@ -25,6 +25,12 @@ path variables and compare storage defaults with the launcher's actual shell blo
 
 ## Dependency Check Diagnostics
 
+`bump_version.sh` checks replacement counts rather than text inequality when
+locating version fields. An already-target version must still reach `uv lock`
+and self-verification, including retries after lock resolution fails. Require
+both chart fields before writing the chart. Offline subprocess coverage lives
+in `backend/tests/test_bump_version_lockfile_sync.py`.
+
 `check_extension.py` checks wheels with Gateway's asset validator.
 CI builds and checks all bundled examples in `extension-package-check.yml`.
 Tests: `backend/tests/test_extension_check_script.py`.
