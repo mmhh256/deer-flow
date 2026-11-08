@@ -756,6 +756,62 @@ class TestWrapModelCallSpecialCases:
         assert "&lt;think&gt;" in merged
         assert processed[1] == image_block
 
+    def test_empty_bare_items_do_not_reach_chat_completions(self):
+        import json
+
+        import httpx
+        from langchain.agents import create_agent
+        from langchain_openai import ChatOpenAI
+
+        sent = []
+
+        def respond(request):
+            sent.append(json.loads(request.content))
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "gpt-4.1",
+                    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Done."}}],
+                },
+            )
+
+        image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}}
+        content = ["", "Hi,", image, "", {"type": "text", "text": "please summarize."}, ""]
+        msg = HumanMessage(content=content)
+        with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            model = ChatOpenAI(model="gpt-4.1", api_key="test", http_client=client)
+            agent = create_agent(model, middleware=[_make_middleware()])
+            agent.invoke({"messages": [msg]})
+
+        assert sent[0]["messages"][0]["content"] == [
+            {"type": "text", "text": _check_user_content("Hi,\nplease summarize.")},
+            image,
+        ]
+        assert msg.content == content
+
+    @pytest.mark.parametrize(
+        "blocks, expected",
+        [
+            (["", {"type": "image_url", "image_url": {"url": "data:test"}}, ""], [{"type": "image_url", "image_url": {"url": "data:test"}}]),
+            (["", ""], ""),
+            (["", {"type": "text", "text": "server context"}], [{"type": "text", "text": "server context"}]),
+        ],
+    )
+    def test_drops_empty_bare_items_when_no_text_needs_rewriting(self, blocks, expected):
+        msg = HumanMessage(content=blocks, additional_kwargs={ORIGINAL_USER_CONTENT_KEY: ""}, id="msg-1")
+        captured = []
+
+        _make_middleware().wrap_model_call(_make_request([msg]), lambda req: captured.append(req) or "ok")
+
+        processed = captured[0].messages[0]
+        assert processed.content == expected
+        assert processed.additional_kwargs == msg.additional_kwargs
+        assert processed.id == msg.id
+        assert msg.content == blocks
+
     def test_already_wrapped_no_override(self):
         mw = _make_middleware()
         already = _check_user_content("Hello")

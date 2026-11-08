@@ -335,12 +335,20 @@ class InputSanitizationMiddleware(AgentMiddleware[AgentState]):
         message is never mutated.
         """
         content = msg.content
+        normalized_message = None
+        if isinstance(content, list):
+            # Empty bare strings carry no text and are not typed content
+            # parts. Remove them even when no text framing is needed.
+            parts = [block for block in content if not (isinstance(block, str) and not block)]
+            if len(parts) != len(content):
+                content = parts or ""
+                normalized_message = msg.model_copy(update={"content": deepcopy(content)})
         text_content, text_blocks = self._extract_text_from_content(content)
 
         # No text at all (e.g. image-only message) — pass through
         if not text_content and not isinstance(content, str):
             logger.debug("_sanitize_message: no text content in message — passing through")
-            return None
+            return normalized_message
 
         # Sanitize only the user's original input when available (set by
         # UploadsMiddleware before it prepends the <current_uploads> block),
@@ -416,7 +424,7 @@ class InputSanitizationMiddleware(AgentMiddleware[AgentState]):
 
         if processed == text_content:
             # Already clean / already wrapped — no override needed
-            return None
+            return normalized_message
 
         if text_blocks:
             new_content = self._rebuild_content(content, processed, text_blocks)
